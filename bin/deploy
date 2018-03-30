@@ -49,9 +49,9 @@ app_json="$(heroku apps::create --json ${app_name:+$app_name})"
 
 app_name=$(echo "$app_json" | jq -r .name)
 app_web_url=$(echo "$app_json" | jq -r .web_url)
-app_git_remote=$(echo "$app_json" | jq -r .git_url)
+app_git_url=$(echo "$app_json" | jq -r .git_url)
 
-echo "Created Heroku app '$app_name' (web URL '$app_web_url', remote GIT endpoint '$app_git_remote'"
+echo "Created Heroku app '$app_name' (web URL '$app_web_url', remote GIT endpoint '$app_git_url'"
 
 echo "Creating admin credentials for app '$app_name'"
 readonly admin_identity="admin"
@@ -73,8 +73,8 @@ fi
 # Create the device database
 
 # Create configuration for other iota tools
-mkdir -p "$cfgdir"
-cat > "$cfgdir/iota.ini" <<EOF
+mkdir -p "$cfgroot"
+cat > "$cfgroot/iota.ini" <<EOF
 [DEFAULT]
 iota_app=$app_name
 
