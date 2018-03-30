@@ -4,6 +4,7 @@
 import os
 import logging
 import gevent
+from functools import wraps
 from flask import Flask
 from flask_sockets import Sockets
 import psycopg2
@@ -15,7 +16,7 @@ admin = {
     'secret': os.environ.get('ADMIN_SECRET')
 }
 
-# db = psycopg2.connect(os.environ['DATABASE_URL'], sslmode='require')
+db = psycopg2.connect(os.environ['DATABASE_URL'], sslmode='require')
 
 def auth_required(f):
     @wraps(f)
