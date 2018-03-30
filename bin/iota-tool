@@ -157,33 +157,5 @@ def main():
 
         time.sleep(config.get('wlan-scan-delay'))
 
-# while [ $T -lt $WLAN_SCAN_TIMEOUT ]; do
-
-#       # Scan for SSIDs matching the provisioning AP SSID
-#        nmcli -g ssid d wifi list | egrep "$ITEAD_PROV_SSID" | while read candidate_ssid; do
-#            log_info "Attempting connection to '$candidate_ssid'"
-#            nmcli d wifi connect "$candidate_ssid" password "$ITEAD_PROV_PASSWORD"
-
-#            T1=0
-#            while [ $T1 -lt $ITEAD_DEVICE_INFO_FETCH_TIMEOUT ]; do
-
-#                device_info=$(curl "http://$ITEAD_PROV_ADDR/device")
-#                if [ $? == 0 ]; then
-#                    log_info "We have received the device info: "
-#                    log_info "$(echo "$device_info" | jq . )"
-#                    break
-#                fi
-
-#                nmcli d wifi rescan
-#                sleep "$ITEAD_DEVICE_INFO_FETCH_DELAY"
-#                T1=$(($T1 + $ITEAD_DEVICE_INFO_FETCH_DELAY))
-#            done
-
-#       done
-
-#       sleep "$WLAN_SCAN_DELAY"
-#       T=$(( $T + $WLAN_SCAN_DELAY ))
-# done
-
 if __name__ == "__main__":
     sys.exit( main() )

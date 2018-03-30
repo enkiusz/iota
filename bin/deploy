@@ -15,6 +15,7 @@ set -euf -o pipefail
 # Default config
 #
 unset app_name
+cfgroot="$HOME/.config/iota"
 
 # Why postgresql? This addon is available without credit card verification with Heroku
 postgresql_addon='heroku-postgresql:hobby-dev' # The name of the Postgresql addon plan
@@ -52,8 +53,16 @@ app_git_remote=$(echo "$app_json" | jq -r .git_url)
 
 echo "Created Heroku app '$app_name' (web URL '$app_web_url', remote GIT endpoint '$app_git_remote'"
 
-echo "Creating Redis Cloud addon '$redis_addon' for app '$app_name'"
-heroku addons:create -a "$app_name" "$redis_addon"
+echo "Creating admin credentials for app '$app_name'"
+readonly admin_identity="admin"
+readonly admin_secret="$(pwgen -1 20)"
+
+heroku config:set -a "$app_name" ADMIN_IDENTITY=$admin_identity
+heroku config:set -a "$app_name" ADMIN_SECRET=$admin_secret
+
+
+echo "Creating DB (Postgresql) addon '$postgresql_addon' for app '$app_name'"
+heroku addons:create -a "$app_name" "$postgresql_addon"
 
 if [ ! -x $(which psql) ]; then
     echo "Postgresql client (psql) command is not available. Please install the required package" >&2
@@ -62,3 +71,20 @@ if [ ! -x $(which psql) ]; then
 fi
 
 # Create the device database
+
+# Create configuration for other iota tools
+mkdir -p "$cfgdir"
+cat > "$cfgdir/iota.ini" <<EOF
+[DEFAULT]
+iota_app=$app_name
+
+[$app_name]
+web-url=$app_web_url
+git-url=$app_git_url
+
+admin_identity=$admin_identity
+admin_secret=$admin_secret
+EOF
+
+# Push code to heroku
+git push heroku master

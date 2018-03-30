@@ -11,11 +11,11 @@ import psycopg2
 app = Flask(__name__)
 
 admin = {
-    'identity': os.environ.get('ADMIN_USERNAME'),
-    'secret': os.environ.get('ADMIN_PASSWORD')
+    'identity': os.environ.get('ADMIN_IDENTITY'),
+    'secret': os.environ.get('ADMIN_SECRET')
 }
 
-db = psycopg2.connect(os.environ['DATABASE_URL'], sslmode='require')
+# db = psycopg2.connect(os.environ['DATABASE_URL'], sslmode='require')
 
 def auth_required(f):
     @wraps(f)
@@ -27,7 +27,7 @@ def auth_required(f):
 
 sockets = Sockets(app)
 
-@app.route('/if')
+@app.route('/')
 def hello():
     return "iota"
 
