@@ -1,0 +1,6 @@
+#!/bin/sh
+
+BINDIR=$(dirname $(realpath $0))
+
+export PATH="$BINDIR:$PATH"
+export PS1="(iota) $PS1"

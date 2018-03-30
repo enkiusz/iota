@@ -1,0 +1,64 @@
+#!/bin/sh
+
+#
+# Deploy the iota on Heroku
+#
+
+#
+# 
+#
+
+# Reference: https://sipb.mit.edu/doc/safe-shell/
+set -euf -o pipefail
+
+#
+# Default config
+#
+unset app_name
+
+# Why postgresql? This addon is available without credit card verification with Heroku
+postgresql_addon='heroku-postgresql:hobby-dev' # The name of the Postgresql addon plan
+
+usage() { echo "Usage: $0 [-s <45|90>] [-p <string>]" 1>&2; exit 1; }
+
+while getopts ":n:p:" o; do
+    case "${o}" in
+        n)
+            app_name="${OPTARG}"
+            ;;
+        d)
+            undeploy="yes"
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+heroku_apps_status=$(heroku status --json | jq -r '.status | .[] | select(.system == "Apps") | .status')
+echo "Heroku Apps system status is '$heroku_apps_status'"
+
+if [ "$heroku_apps_status" != "green" ]; then
+    echo "Heroku Apps status is not green, aborting" >&2
+    exit 1
+fi
+
+app_json="$(heroku apps::create --json ${app_name:+$app_name})"
+
+app_name=$(echo "$app_json" | jq -r .name)
+app_web_url=$(echo "$app_json" | jq -r .web_url)
+app_git_remote=$(echo "$app_json" | jq -r .git_url)
+
+echo "Created Heroku app '$app_name' (web URL '$app_web_url', remote GIT endpoint '$app_git_remote'"
+
+echo "Creating Redis Cloud addon '$redis_addon' for app '$app_name'"
+heroku addons:create -a "$app_name" "$redis_addon"
+
+if [ ! -x $(which psql) ]; then
+    echo "Postgresql client (psql) command is not available. Please install the required package" >&2
+    echo "For example, in Debian and Ubuntu run the command: 'sudo apt install postgresql'" >&2
+    exit 1
+fi
+
+# Create the device database

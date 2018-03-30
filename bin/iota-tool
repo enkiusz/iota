@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+
+import logging
+import argparse
+import subprocess
+import time
+import sys
+import re
+import requests
+
+log = logging.getLogger(__name__)
+
+config = {
+    'wlan-scan-delay': 1,
+    'wlan-scan-timeout': 120,
+
+    # TODO: This pattern may be too specific, maybe loosen up a bit
+    'itead-prov-ssid': r'ITEAD-10000[0-9a-fA-F]{5}',
+    'itead-prov-psk': '12345678',
+    'itead-prov-host': '10.10.7.1',
+    'itead-devinfo-fetch-delay': 2,
+    'itead-devinfo-fetch-timeout': 60
+
+}
+
+def find_wlan_interface():
+    ifacelist = subprocess.run(["nmcli", "-t", "-f", "device,type,state", "device"], stdout=subprocess.PIPE, env={"LC_ALL": "C"})
+    if ifacelist.returncode != 0:
+        log.warn("Could not autodetect a 802.11 interface")
+
+    for iface_line in ifacelist.stdout.decode('utf-8').split('\n'):
+        log.debug("802.11 interface line: '{}'".format(iface_line))
+        device, type, state = iface_line.split(':')
+
+        if type == 'wifi' and state != 'unmanaged':
+            log.info("Will use autodetected 802.11 interface '{}'".format(device))
+            return device
+
+    return None
+
+def itead_prov_connection_create(ssid):
+    log.info("Creating ITEAD provisioning connection to SSID '{}' using interace '{}'".format(ssid, config.get('interface')))
+    conn_id = 'prov-{}'.format(ssid)
+    conn_add_proc = subprocess.run(['nmcli', 'connection', 'add',
+                                    'connection.id', conn_id,
+                                    'connection.type', '802-11-wireless',
+                                    'connection.interface-name', config.get('interface'),
+                                    'connection.autoconnect', 'no',
+                                    '802-11-wireless.ssid', ssid,
+                                    '802-11-wireless-security.key-mgmt', 'wpa-psk',
+                                    '802-11-wireless-security.psk', config.get('itead-prov-psk')
+    ])
+    if conn_add_proc.returncode != 0:
+        log.error("Couldn't create provisioning connection to SSID '{}' using interface".format(ssid, config.get('interface')))
+        return None
+
+    # TODO: Make this the proper UUID for this connection, SSID may be not specific enough in certain situations
+    # (like multiple 802.11 interfaces available or some leftover connections from previous attempts)
+    return conn_id
+
+def itead_prov_connection_delete(conn_id):
+    log.info("Removing ITEAD provisioning connection '{}'".format(conn_id))
+
+    conn_add_proc = subprocess.run(['nmcli', 'connection', 'delete', conn_id])
+    if conn_add_proc.returncode != 0:
+        log.error("Couldn't delete connection '{}' using interface".format(conn_id))
+        return False
+
+    return True
+
+def itead_provision(ssid):
+    log.info("Provisioning ITEAD device with SSID '{}' using interface '{}'".format(ssid, config.get('interface')))
+    rv = 0
+
+    conn_id = itead_prov_connection_create(ssid)
+
+    log.info("Establishing connection '{}'".format(conn_id))
+    proc = subprocess.run(['nmcli', 'connection', 'up', conn_id])
+    if proc.returncode != 0:
+        log.error("Couldn't establish provisioning connection to SSID '{}' using interface '{}'".format(ssid, config.get('interface')))
+        itead_prov_connection_delete(conn_id)
+        return 0
+
+    # Now we provision
+    log.debug("NOW THE PROVISIONING HAPPENS")
+    device_info = requests.get("http://{}/device".format(config.get('itead-prov-host')))
+    log.debug("Device information fetched: '{}".format(device_info.json()))
+
+    # Example output:
+    # DEBUG:__main__:Device information fetched: '{'deviceid': '1000011af2', 'apikey': '002e9a07-4084-4f7e-a757-442628b5a03d', 'accept': 'post'}
+    #
+
+    time.sleep(10)
+
+    log.info("Shutting down connection '{}'".format(conn_id))
+    proc = subprocess.run(['nmcli', 'connection', 'down', conn_id])
+    if proc.returncode != 0:
+        # itead_prov_delete(conn_id)
+        log.error("Couldn't disconnect provisioning connection to SSID '{}' using interface '{}'".format(ssid, config.get('interface')))
+        return rv
+
+    # itead_prov_connection_delete(conn_id)
+    return rv
+
+def main():
+
+    parser = argparse.ArgumentParser()
+    prov = parser.add_argument_group("Provisioning")
+    prov.add_argument("--interface", default=find_wlan_interface(), help="Set the 802.11 interface to use to provision the device")
+    infranet = parser.add_argument_group("Infrastructure network")
+    infranet.add_argument("--infra-ssid", help="Set the SSID for the infrastructure network")
+    infranet.add_argument("--infra-psk-file", help="Set the name of a file containing a PSK password for the infrastructure network")
+    mothership = parser.add_argument_group("Mothership options")
+    mothership.add_argument("--server-ip", help="The IP address the ITEAD device will connect to.")
+    mothership.add_argument("--server-port", help="The TCP port number the ITEAD device will connect to. This port needs to use TLS.")
+
+    logging.basicConfig(level=logging.DEBUG)
+
+    args = parser.parse_args()
+
+    if args.interface is None:
+        log.fatal("802.11 interface needs to be specifed or auto-detected, see help")
+        sys.exit(1)
+
+    config['interface'] = args.interface
+
+    log.debug("Commandline arguments: '{}'".format(args))
+
+    ssid_find_start = time.time()
+    while time.time() < ssid_find_start + config.get("wlan-scan-timeout"):
+        log.info("Searching for SSIDs maching '{}' on interface '{}'".format(config.get("itead-prov-ssid"), config.get('interface')))
+        subprocess.run(["nmcli", "-t", "-f", "ssid", "device", "wifi", "rescan"])
+        listprocess = subprocess.run(["nmcli", "-t", "-f", "ssid", "device", "wifi", "list"], stdout=subprocess.PIPE)
+
+        if listprocess.returncode != 0:
+            log.warn("NetworkManager nmcli script returned '{}' when running wifi search command")
+            time.sleep(config.get('wlan-scan-delay'))
+            continue
+
+        ssids = listprocess.stdout.decode('utf-8').split("\n")
+        candidate_ssids = list(filter(lambda ssid: re.match(config.get('itead-prov-ssid'), ssid), ssids ))
+
+        log.debug("Found SSIDs: '{}'".format(ssids))
+        log.debug("Candidate ITEAD SSIDs: '{}'".format(candidate_ssids))
+
+        log.info("Found {} candidate SSIDs matching expected pattern".format(len(candidate_ssids)))
+
+        if len(candidate_ssids) > 0:
+
+            devices_provisioned_count = 0
+            for ssid in candidate_ssids:
+                if itead_provision(ssid):
+                    devices_provisioned_count += 1
+
+            log.info("Provisioned {} ITEAD devices".format(devices_provisioned_count))
+            break
+
+        time.sleep(config.get('wlan-scan-delay'))
+
+# while [ $T -lt $WLAN_SCAN_TIMEOUT ]; do
+
+#       # Scan for SSIDs matching the provisioning AP SSID
+#        nmcli -g ssid d wifi list | egrep "$ITEAD_PROV_SSID" | while read candidate_ssid; do
+#            log_info "Attempting connection to '$candidate_ssid'"
+#            nmcli d wifi connect "$candidate_ssid" password "$ITEAD_PROV_PASSWORD"
+
+#            T1=0
+#            while [ $T1 -lt $ITEAD_DEVICE_INFO_FETCH_TIMEOUT ]; do
+
+#                device_info=$(curl "http://$ITEAD_PROV_ADDR/device")
+#                if [ $? == 0 ]; then
+#                    log_info "We have received the device info: "
+#                    log_info "$(echo "$device_info" | jq . )"
+#                    break
+#                fi
+
+#                nmcli d wifi rescan
+#                sleep "$ITEAD_DEVICE_INFO_FETCH_DELAY"
+#                T1=$(($T1 + $ITEAD_DEVICE_INFO_FETCH_DELAY))
+#            done
+
+#       done
+
+#       sleep "$WLAN_SCAN_DELAY"
+#       T=$(( $T + $WLAN_SCAN_DELAY ))
+# done
+
+if __name__ == "__main__":
+    sys.exit( main() )
