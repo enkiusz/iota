@@ -5,7 +5,7 @@ import os
 import logging
 import gevent
 from functools import wraps
-from flask import Flask
+from flask import Flask, request
 from flask_sockets import Sockets
 import psycopg2
 
