@@ -5,25 +5,44 @@ import argparse
 import subprocess
 import time
 import sys
+import os
 import re
 import requests
+import configparser
+import socket
+import json
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
 config = {
+    #
+    # Generic settings (all 802.11 provisioning protocols)
+    #
     'wlan-scan-delay': 1,
     'wlan-scan-timeout': 120,
+
+    # Infrastructure network information
+    'wlan-infra-ssid': None,
+    'wlan-infra-psk': None,
+
+    #
+    # Settings specific to the ITEAD provisioning protocol
+    #
 
     # TODO: This pattern may be too specific, maybe loosen up a bit
     'itead-prov-ssid': r'ITEAD-10000[0-9a-fA-F]{5}',
     'itead-prov-psk': '12345678',
     'itead-prov-host': '10.10.7.1',
     'itead-devinfo-fetch-delay': 2,
-    'itead-devinfo-fetch-timeout': 60
+    'itead-devinfo-fetch-timeout': 60,
+
+    'itead-server-host': None,
+    'itead-server-port': 443,
 
 }
 
-def find_wlan_interface():
+def detect_wlan_interface():
     ifacelist = subprocess.run(["nmcli", "-t", "-f", "device,type,state", "device"], stdout=subprocess.PIPE, env={"LC_ALL": "C"})
     if ifacelist.returncode != 0:
         log.warn("Could not autodetect a 802.11 interface")
@@ -38,8 +57,38 @@ def find_wlan_interface():
 
     return None
 
+def detect_infra_network(interface):
+    connlist_proc = subprocess.run(["nmcli", "-t", "-f", "device,state,uuid,name", "connection"], stdout=subprocess.PIPE, env={"LC_ALL": "C"})
+    if connlist_proc.returncode != 0:
+        log.warn("Could not autodetect a 802.11 interface")
+
+    for conn_line in connlist_proc.stdout.decode('utf-8').split('\n'):
+        if len(conn_line) == 0:
+            continue
+
+        log.debug("Network connection line: '{}'".format(conn_line))
+        device, state, uuid, name = conn_line.split(':')
+
+        if device == interface and state == "activated":
+            log.info("Fetching information about currently activated connection '{}' to SSID '{}'".format(uuid, name))
+
+            conninfo_proc = subprocess.run(["nmcli", "-t", "-f", "802-11-wireless.ssid,802-11-wireless-security.psk", "-s", "connection", "show", uuid], stdout=subprocess.PIPE, env={"LC_ALL": "C"})
+            conninfo = dict()
+            for info_line in conninfo_proc.stdout.decode('utf-8').split('\n'):
+                if len(info_line) == 0:
+                    continue
+
+                log.debug("Connection information line: '{}'".format(info_line))
+                k, v = info_line.split(':')
+                conninfo[k] = v
+
+            log.debug("Got information for connection '{}' to SSID '{}': {}".format(uuid, name, conninfo))
+            return (conninfo['802-11-wireless.ssid'], conninfo['802-11-wireless-security.psk'])
+
+    return (None, None)
+
 def itead_prov_connection_create(ssid):
-    log.info("Creating ITEAD provisioning connection to SSID '{}' using interace '{}'".format(ssid, config.get('interface')))
+    log.info("Creating ITEAD provisioning connection to SSID '{}' using interface '{}'".format(ssid, config.get('interface')))
     conn_id = 'prov-{}'.format(ssid)
     conn_add_proc = subprocess.run(['nmcli', 'connection', 'add',
                                     'connection.id', conn_id,
@@ -81,8 +130,9 @@ def itead_provision(ssid):
         itead_prov_connection_delete(conn_id)
         return 0
 
-    # Now we provision
-    log.debug("NOW THE PROVISIONING HAPPENS")
+    #
+    # Get info about device
+    #
     device_info = requests.get("http://{}/device".format(config.get('itead-prov-host')))
     log.debug("Device information fetched: '{}".format(device_info.json()))
 
@@ -90,41 +140,113 @@ def itead_provision(ssid):
     # DEBUG:__main__:Device information fetched: '{'deviceid': '1000011af2', 'apikey': '002e9a07-4084-4f7e-a757-442628b5a03d', 'accept': 'post'}
     #
 
-    time.sleep(10)
+    prov_req = {
+        # This doesn't seem to be present in traffic dump
+        # 'version': 4,
+        'ssid': config['wlan-infra-ssid'],
+        'password': config['wlan-infra-psk'],
+
+        # This *has* to be a hostname, putting an IP address here doesn't work
+        'serverName': config['itead-server-hostname'],
+        'port': config['itead-server-port']
+    }
+
+    prov_url = "http://{}/ap".format(config.get('itead-prov-host'))
+    log.debug("Sending provisioning request to endpoint '{}': {}".format(prov_url, prov_req))
+
+    # prov_resp = requests.post(prov_url, data=json.dumps(prov_req))
+    prov_resp = requests.post(prov_url, json=prov_req)
+
+    log.debug("Provisioning request returned '{}' result code, content: {}".format(prov_resp.status_code, prov_resp.text))
 
     log.info("Shutting down connection '{}'".format(conn_id))
     proc = subprocess.run(['nmcli', 'connection', 'down', conn_id])
     if proc.returncode != 0:
-        # itead_prov_delete(conn_id)
+        itead_prov_delete(conn_id)
         log.error("Couldn't disconnect provisioning connection to SSID '{}' using interface '{}'".format(ssid, config.get('interface')))
         return rv
 
-    # itead_prov_connection_delete(conn_id)
+    itead_prov_connection_delete(conn_id)
     return rv
 
 def main():
 
     parser = argparse.ArgumentParser()
     prov = parser.add_argument_group("Provisioning")
-    prov.add_argument("--interface", default=find_wlan_interface(), help="Set the 802.11 interface to use to provision the device")
+    prov.add_argument("--interface", default=detect_wlan_interface(), help="Set the 802.11 interface to use to provision the device")
     infranet = parser.add_argument_group("Infrastructure network")
     infranet.add_argument("--infra-ssid", help="Set the SSID for the infrastructure network")
     infranet.add_argument("--infra-psk-file", help="Set the name of a file containing a PSK password for the infrastructure network")
     mothership = parser.add_argument_group("Mothership options")
-    mothership.add_argument("--server-ip", help="The IP address the ITEAD device will connect to.")
+    mothership.add_argument("--server-hostname", help="The hostname the ITEAD device will connect to.")
     mothership.add_argument("--server-port", help="The TCP port number the ITEAD device will connect to. This port needs to use TLS.")
 
     logging.basicConfig(level=logging.DEBUG)
 
+    # Configuration file location
+    config_filename = os.path.join(os.getenv('HOME'),'.config','iota','iota.ini')
+    log.debug("Loading configuration from file '{}'".format(config_filename))
+
+    cfile = configparser.ConfigParser()
+    cfile.read(config_filename)
+
+    log.debug("Configuration sections loaded from file '{}': {}".format(config_filename, cfile.sections()))
+
     args = parser.parse_args()
+    log.debug("Commandline arguments: '{}'".format(args))
 
     if args.interface is None:
         log.fatal("802.11 interface needs to be specifed or auto-detected, see help")
         sys.exit(1)
 
     config['interface'] = args.interface
+    config['wlan-infra-ssid'] = args.infra_ssid
+    if args.infra_psk_file is not None:
+        with open(args.infra_psk_file, "r") as f:
+            config['wlan-infra-psk'] = f.read().rstrip()
 
-    log.debug("Commandline arguments: '{}'".format(args))
+    if config['wlan-infra-ssid'] is None or config['wlan-infra-psk'] is None:
+        log.warn("Infrastructure network information not provided, attempting to autodetect infrastructure network")
+
+        (infra_ssid, infra_psk) = detect_infra_network(config['interface'])
+        if infra_ssid is None or infra_psk is None:
+            log.fatal("Not satisfied with detection results - either connect now to the infrastructure network or provide both an SSID and PSK commandline parameters")
+            sys.exit(1)
+
+        config['wlan-infra-ssid'] = infra_ssid
+        config['wlan-infra-psk'] = infra_psk
+
+    #
+    # Detect server name and port
+    #
+    iota_app = cfile['DEFAULT']['iota_app']
+    url = urlparse(cfile[iota_app]['web-url'])
+
+    config['itead-server-hostname'] = url.hostname
+
+    if url.port is not None:
+        config['itead-sever-port'] = url.port
+    else:
+        # Deduce port from scheme
+        if url.scheme == 'http':
+            config['itead-server-port'] = 80
+        elif url.scheme == 'https':
+            config['itead-server-port'] = 443
+        else:
+            log.warn("Cannot determine port for web url '{}' assigned to iota app '{}'".format(url, iota_app))
+
+    #
+    # Override with commandline args
+    #
+
+    if args.server_hostname:
+        config['itead-server-hostname'] = args.server_host
+    if args.server_port:
+        config['itead-server-port'] = args.server_port
+
+    log.info("Using '{}:{}' as iota server".format(config['itead-server-hostname'], config['itead-server-port']))
+
+    log.debug("Working configuration dump: '{}'".format(config))
 
     ssid_find_start = time.time()
     while time.time() < ssid_find_start + config.get("wlan-scan-timeout"):
