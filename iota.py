@@ -9,6 +9,7 @@ from flask import Flask, request
 from flask_sockets import Sockets
 import psycopg2
 
+logging.basicConfig(level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO")))
 log = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -60,7 +61,6 @@ def inbox(ws):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
 
     from gevent import pywsgi
     from geventwebsocket.handler import WebSocketHandler
