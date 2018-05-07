@@ -31,7 +31,7 @@ def auth_required(f):
 sockets = Sockets(app)
 
 # Reference: https://github.com/vponomarev/Sonoff-Server/blob/master/doc/ServerExchange.log.txt
-@app.route('/dispatch/device', metchods=["POST"])
+@app.route('/dispatch/device', methods=["POST"])
 def dispatch_device():
     log.debug("Received dispatch request '{}'".format(request))
     return "{}"
