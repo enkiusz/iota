@@ -9,6 +9,8 @@ from flask import Flask, request
 from flask_sockets import Sockets
 import psycopg2
 
+log = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
 admin = {
@@ -27,6 +29,12 @@ def auth_required(f):
     return decorated
 
 sockets = Sockets(app)
+
+# Reference: https://github.com/vponomarev/Sonoff-Server/blob/master/doc/ServerExchange.log.txt
+@app.route('/dispatch/device', metchods=["POST"])
+def dispatch_device():
+    log.debug("Received dispatch request '{}'".format(request))
+    return "{}"
 
 @app.route('/')
 def hello():
@@ -52,7 +60,7 @@ def inbox(ws):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
 
     from gevent import pywsgi
     from geventwebsocket.handler import WebSocketHandler
